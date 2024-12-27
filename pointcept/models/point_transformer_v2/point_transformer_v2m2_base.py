@@ -19,9 +19,14 @@ import einops
 from timm.models.layers import DropPath
 import pointops
 
-from pointcept.models.builder import MODELS
+from pointcept.models.builder import MODELS  
 from pointcept.models.utils import offset2batch, batch2offset
-
+from pointcept.attention.CBAM import CBAM
+from pointcept.attention.SE_Net import SE
+from pointcept.attention.ECA import ECA_block
+from pointcept.attention.SK_Net import SKConv
+from pointcept.attention.Non_Local_Net import NonLocalBlockND
+from pointcept.attention.CA import ChannelAttention
 
 class PointBatchNorm(nn.Module):
     """
@@ -43,6 +48,7 @@ class PointBatchNorm(nn.Module):
             return self.norm(input)
         else:
             raise NotImplementedError
+        
 
 
 class GroupedVectorAttention(nn.Module):
@@ -99,7 +105,6 @@ class GroupedVectorAttention(nn.Module):
         )
         self.softmax = nn.Softmax(dim=1)
         self.attn_drop = nn.Dropout(attn_drop_rate)
-
     def forward(self, feat, coord, reference_index):
         query, key, value = (
             self.linear_q(feat),
@@ -120,15 +125,13 @@ class GroupedVectorAttention(nn.Module):
 
         weight = self.weight_encoding(relation_qk)
         weight = self.attn_drop(self.softmax(weight))
-
         mask = torch.sign(reference_index + 1)
         weight = torch.einsum("n s g, n s -> n s g", weight, mask)
         value = einops.rearrange(value, "n ns (g i) -> n ns g i", g=self.groups)
         feat = torch.einsum("n s g i, n s g -> n g i", value, weight)
         feat = einops.rearrange(feat, "n g i -> n (g i)")
         return feat
-
-
+    
 class Block(nn.Module):
     def __init__(
         self,
@@ -552,21 +555,34 @@ class PointTransformerV2(nn.Module):
             if num_classes > 0
             else nn.Identity()
         )
-
+        #self.cbam = CBAM(patch_embed_channels)
+        #self.se = SE(patch_embed_channels)
+        #self.eca = ECA_block(patch_embed_channels)
+        #self.sk = SKConv(patch_embed_channels)
+        self.nl = NonLocalBlockND(patch_embed_channels)
+        #self.ca = ChannelAttention(patch_embed_channels)
     def forward(self, data_dict):
         coord = data_dict["coord"]
         feat = data_dict["feat"]
         offset = data_dict["offset"].int()
-
         # a batch of point cloud is a list of coord, feat and offset
         points = [coord, feat, offset]
         points = self.patch_embed(points)
-        skips = [[points]]
+        coord, feat, offset = points
+        feat = feat.unsqueeze(2).unsqueeze(3)
+        feat = self.nl(feat)
+        feat = feat.squeeze(2).squeeze(2)
+        #feat = self.cbam(feat)
+        #feat = self.se(feat)
+        #feat = self.eca(feat)   
+        #feat = self.sk(feat)
+        #feat = self.ca(feat)
+        points = [coord, feat, offset]
+        skips = [[points]] 
         for i in range(self.num_stages):
             points, cluster = self.enc_stages[i](points)
             skips[-1].append(cluster)  # record grid cluster of pooling
             skips.append([points])  # record points info of current stage
-
         points = skips.pop(-1)[0]  # unpooling points info in the last enc stage
         for i in reversed(range(self.num_stages)):
             skip_points, cluster = skips.pop(-1)
