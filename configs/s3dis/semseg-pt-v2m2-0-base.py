@@ -33,7 +33,8 @@ model = dict(
         enable_checkpoint=False,
         unpool_backend="interp",  # map / interp
     ),
-    criteria=[dict(type="CrossEntropyLoss", loss_weight=1.0, ignore_index=-1)],
+    criteria=[dict(type="CrossEntropyLoss", loss_weight=1.0, ignore_index=-1,)
+    dict(type="FocalLoss", loss_weight=2.0, alpha=0.25, gamma=0.5, ignore_index=-1)],
 )
 
 # scheduler settings
